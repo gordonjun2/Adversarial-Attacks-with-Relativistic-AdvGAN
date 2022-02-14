@@ -19,5 +19,5 @@
 	"c" : 0.1, 
 	"D_number_of_steps_per_batch" : 1, 
 	"G_number_of_steps_per_batch" : 1, 
-	"is_relativistic" : "True"
+	"is_relativistic" : "False"
 }

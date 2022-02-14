@@ -142,6 +142,32 @@ def init_params(target):
 
         train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
         test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
+    elif target == 'MSTAR':
+        batch_size = 100                                                                                    # copy AConvNet-pytorch (https://github.com/jangsoopark/AConvNet-pytorch/blob/main/experiments/config/AConvNet-SOC.json)
+        l_inf_bound = .01 if L_INF_BOUND == 'Auto' else L_INF_BOUND
+        
+        n_labels = 10
+        n_channels = 3
+
+        target_model = m.inception_v3(pretrained=True).to(device)
+        target_model.eval()
+
+        transform = transforms.Compose([
+                            transforms.Resize(128), 
+                            transforms.ToTensor(), 
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                        ])                                                                                  # refer to 'Adversarial Attack for SAR Target Recognition Based on UNet-Generative Adversarial Network' for size
+
+        # TODO (need to load MSTAR here)
+        dataset = cd.HighResolutionDataset('./datasets/high_resolution/img', transform=transform)
+
+        # GET THE SHAPE OF train_dataset and test_dataset first
+        train_dataset, test_dataset = cd.split_dataset(dataset)
+        train_sampler = SubsetRandomSampler(train_dataset)
+        test_sampler = SubsetRandomSampler(test_dataset)
+
+        train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
+        test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
     else:
         raise NotImplementedError('Unknown Dataset')
 
