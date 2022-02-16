@@ -88,6 +88,18 @@ def create_dirs():
     if not os.path.exists('./npy/HighResolution/'):
         os.makedirs('./npy/HighResolution/')
 
+def load_mstar_dataset(path, is_train, name, batch_size):
+    transform = [preprocess.CenterCrop(88), torchvision.transforms.ToTensor()]
+    if is_train:
+        transform = [preprocess.RandomCrop(88), torchvision.transforms.ToTensor()]
+    _dataset = loader.Dataset(
+        path, name=name, is_train=is_train,
+        transform=torchvision.transforms.Compose(transform)
+    )
+    data_loader = torch.utils.data.DataLoader(
+        _dataset, batch_size=batch_size, shuffle=is_train, num_workers=1
+    )
+    return _dataset, data_loader
 
 def init_params(target):
     if target == 'MNIST':
@@ -143,31 +155,53 @@ def init_params(target):
         train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
         test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
     elif target == 'MSTAR':
-        batch_size = 100                                                                                    # copy AConvNet-pytorch (https://github.com/jangsoopark/AConvNet-pytorch/blob/main/experiments/config/AConvNet-SOC.json)
         l_inf_bound = .01 if L_INF_BOUND == 'Auto' else L_INF_BOUND
         
-        n_labels = 10
-        n_channels = 3
+        # copy AConvNet-pytorch (https://github.com/jangsoopark/AConvNet-pytorch/blob/main/experiments/config/AConvNet-SOC.json)
+
+        experiments_path = './AConvNet_MSTAR_experiments'
+        config_name = 'config/AConvNet-SOC.json'
+
+        config = common.load_config(os.path.join(experiments_path, config_name))
+
+        dataset = config['dataset']
+        n_labels = config['num_classes']
+        n_channels = config['channels']
+        epochs = config['epochs']
+        batch_size = config['batch_size']
+
+        lr = config['lr']
+        lr_step = config['lr_step']
+        lr_decay = config['lr_decay']
+
+        weight_decay = config['weight_decay']
+        dropout_rate = config['dropout_rate']
+
+        model_name = config['model_name']
 
         target_model = m.inception_v3(pretrained=True).to(device)
         target_model.eval()
 
-        transform = transforms.Compose([
-                            transforms.Resize(128), 
-                            transforms.ToTensor(), 
-                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                        ])                                                                                  # refer to 'Adversarial Attack for SAR Target Recognition Based on UNet-Generative Adversarial Network' for size
+        # transform = transforms.Compose([
+        #                     transforms.Resize(128), 
+        #                     transforms.ToTensor(), 
+        #                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        #                 ])                                                                                  # refer to 'Adversarial Attack for SAR Target Recognition Based on UNet-Generative Adversarial Network' for size
 
-        # TODO (need to load MSTAR here)
-        dataset = cd.HighResolutionDataset('./datasets/high_resolution/img', transform=transform)
+        # # TODO (need to load MSTAR here)
+        # dataset = cd.HighResolutionDataset('./datasets/high_resolution/img', transform=transform)
 
-        # GET THE SHAPE OF train_dataset and test_dataset first
-        train_dataset, test_dataset = cd.split_dataset(dataset)
-        train_sampler = SubsetRandomSampler(train_dataset)
-        test_sampler = SubsetRandomSampler(test_dataset)
+        # # GET THE SHAPE OF train_dataset and test_dataset first
+        # train_dataset, test_dataset = cd.split_dataset(dataset)
+        # train_sampler = SubsetRandomSampler(train_dataset)
+        # test_sampler = SubsetRandomSampler(test_dataset)
 
-        train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
-        test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
+        # train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
+        # test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
+
+        train_dataset, train_dataloader = load_mstar_dataset('dataset', True, dataset, batch_size)
+        test_dataset, test_dataloader = load_mstar_dataset('dataset', False, dataset, batch_size)
+
     else:
         raise NotImplementedError('Unknown Dataset')
 

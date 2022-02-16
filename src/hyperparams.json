@@ -1,7 +1,7 @@
 {
 	"comment" : "Settings for Target Model", 
 
-	"target_dataset" : "HighResolution", 
+	"target_dataset" : "MSTAR", 
 	"target_learning_rate" : 0.001, 
 	"target_model_epochs" : 50, 
 
