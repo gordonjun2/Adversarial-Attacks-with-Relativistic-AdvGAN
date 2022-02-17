@@ -20,6 +20,7 @@ import json
 import numpy as np
 
 import torch
+import torch.nn as nn
 import torchvision.datasets
 import torch.nn.functional as F
 import torchvision.transforms as transforms
@@ -35,6 +36,10 @@ from advGAN import AdvGAN_Attack
 from AConvNet_data import preprocess
 from AConvNet_data import loader
 from AConvNet_utils import common
+import AConvNet_model
+
+from absl import logging
+from tqdm import tqdm
 
 def load_hyperparameters(config_file):
     with open(config_file) as hp_file:
@@ -78,6 +83,12 @@ def create_dirs():
     if not os.path.exists('./results/examples/HighResolution/test/'):
         os.makedirs('./results/examples/HighResolution/test/')
 
+    if not os.path.exists('./results/examples/MSTAR/train/'):
+        os.makedirs('./results/examples/MSTAR/train/')
+
+    if not os.path.exists('./results/examples/MSTAR/test/'):
+        os.makedirs('./results/examples/MSTAR/test/')
+
     if not os.path.exists('./checkpoints/target/'):
         os.makedirs('./checkpoints/target/')
 
@@ -89,6 +100,9 @@ def create_dirs():
 
     if not os.path.exists('./npy/HighResolution/'):
         os.makedirs('./npy/HighResolution/')
+
+    if not os.path.exists('./npy/MSTAR/'):
+        os.makedirs('./npy/MSTAR/')
 
 def load_mstar_dataset(path, is_train, name, batch_size):
     transform = [preprocess.CenterCrop(88), torchvision.transforms.ToTensor()]
@@ -102,6 +116,11 @@ def load_mstar_dataset(path, is_train, name, batch_size):
         _dataset, batch_size=batch_size, shuffle=is_train, num_workers=1
     )
     return _dataset, data_loader
+
+def set_parameter_requires_grad(model, feature_extracting):
+    if feature_extracting:
+        for param in model.parameters():
+            param.requires_grad = False
 
 def init_params(target):
     if target == 'MNIST':
@@ -181,73 +200,176 @@ def init_params(target):
 
         model_name = config['model_name']
 
-        target_model = m.inception_v3(pretrained=True).to(device)
-        target_model.eval()
+        target_model = AConvNet_model.Model(
+            classes=n_labels, dropout_rate=dropout_rate, channels=n_channels,
+            lr=lr, lr_step=lr_step, lr_decay=lr_decay,
+            weight_decay=weight_decay
+        )
 
-        # transform = transforms.Compose([
-        #                     transforms.Resize(128), 
-        #                     transforms.ToTensor(), 
-        #                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        #                 ])                                                                                  # refer to 'Adversarial Attack for SAR Target Recognition Based on UNet-Generative Adversarial Network' for size
+        # target_model = m.inception_v3(pretrained=False)
 
-        # # TODO (need to load MSTAR here)
-        # dataset = cd.HighResolutionDataset('./datasets/high_resolution/img', transform=transform)
+        # # Flag for feature extracting. When False, we finetune the whole model,
+        # #   when True we only update the reshaped layer params
+        # feature_extract = True
 
-        # # GET THE SHAPE OF train_dataset and test_dataset first
-        # train_dataset, test_dataset = cd.split_dataset(dataset)
-        # train_sampler = SubsetRandomSampler(train_dataset)
-        # test_sampler = SubsetRandomSampler(test_dataset)
+        # # model.aux_logits = False
 
-        # train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
-        # test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
+        # # for parameter in model.parameters():
+        # #     parameter.requires_grad = False
 
-        train_dataset, train_dataloader = load_mstar_dataset('dataset', True, dataset, batch_size)
-        test_dataset, test_dataloader = load_mstar_dataset('dataset', False, dataset, batch_size)
+        # # model.fc = nn.Sequential(
+        # #     nn.Linear(model.fc.in_features, 10),
+        # #     nn.Linear(10, 2)
+        # # )
+
+        # # model.AuxLogits.fc = nn.Linear(768, num_classes)
+        # # model.fc = nn.Linear(2048, num_classes)
+
+        # set_parameter_requires_grad(target_model, feature_extract)
+        # # Handle the auxilary net
+        # num_ftrs = target_model.AuxLogits.fc.in_features
+        # target_model.AuxLogits.fc = nn.Linear(num_ftrs, n_labels)
+        # # Handle the primary net
+        # num_ftrs = target_model.fc.in_features
+        # target_model.fc = nn.Linear(num_ftrs,n_labels)
+
+        # target_model.to(device)
+
+        # target_model.eval()
+
+        # # transform = transforms.Compose([
+        # #                     transforms.Resize(128), 
+        # #                     transforms.ToTensor(), 
+        # #                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        # #                 ])                                                                                  # refer to 'Adversarial Attack for SAR Target Recognition Based on UNet-Generative Adversarial Network' for size
+
+        # # # TODO (need to load MSTAR here)
+        # # dataset = cd.HighResolutionDataset('./datasets/high_resolution/img', transform=transform)
+
+        # # # GET THE SHAPE OF train_dataset and test_dataset first
+        # # train_dataset, test_dataset = cd.split_dataset(dataset)
+        # # train_sampler = SubsetRandomSampler(train_dataset)
+        # # test_sampler = SubsetRandomSampler(test_dataset)
+
+        # # train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
+        # # test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
+
+        train_dataset, train_dataloader = load_mstar_dataset('src\datasets\MSTAR_AConvNet_PyTorch', True, dataset, batch_size)
+        test_dataset, test_dataloader = load_mstar_dataset('src\datasets\MSTAR_AConvNet_PyTorch', False, dataset, batch_size)
 
     else:
         raise NotImplementedError('Unknown Dataset')
 
     return train_dataloader, test_dataloader, target_model, batch_size, l_inf_bound, n_labels, n_channels, len(test_dataset)
 
+@torch.no_grad()
+def AConvNet_validation(m, ds):
+    num_data = 0
+    corrects = 0
 
-def train_target_model(target, target_model, epochs, train_dataloader, test_dataloader, dataset_size):
-    target_model.train()
-    optimizer = torch.optim.Adam(target_model.parameters(), lr=LR_TARGET_MODEL)
-    
-    for epoch in range(epochs):
-        loss_epoch = 0
+    # Test loop
+    m.net.eval()
+    _softmax = torch.nn.Softmax(dim=1)
+    for i, data in enumerate(tqdm(ds)):
+        images, labels, _ = data
 
-        for i, data in enumerate(train_dataloader, 0):
+        predictions = m.inference(images)
+        predictions = _softmax(predictions)
 
-            train_imgs, train_labels = data
-            train_imgs, train_labels = train_imgs.to(device), train_labels.to(device)
+        _, predictions = torch.max(predictions.data, 1)
+        labels = labels.type(torch.LongTensor)
+        num_data += labels.size(0)
+        corrects += (predictions == labels.to(m.device)).sum().item()
 
-            logits_model = target_model(train_imgs)
-            criterion = F.cross_entropy(logits_model, train_labels)
-            loss_epoch += criterion
+    accuracy = 100 * corrects / num_data
+    return accuracy
+
+def train_target_model(target, target_model, epochs, train_dataloader, test_dataloader, dataset_size):    
+    if target == 'MSTAR':
+
+        experiments_path = './AConvNet_MSTAR_experiments'
+        model_name = "AConvNet-SOC"
+
+        model_path = os.path.join(experiments_path, f'model/{model_name}')
+        if not os.path.exists(model_path):
+            os.makedirs(model_path, exist_ok=True)
+
+        history_path = os.path.join(experiments_path, 'history')
+        if not os.path.exists(history_path):
+            os.makedirs(history_path, exist_ok=True)
+
+        history = {
+            'loss': [],
+            'accuracy': []
+        }
+
+        for epoch in range(epochs):
+            _loss = []
+
+            target_model.net.train()
+            for i, data in enumerate(tqdm(train_dataloader)):
+                images, labels, _ = data
+                _loss.append(target_model.optimize(images, labels))
+
+            if target_model.lr_scheduler:
+                lr = target_model.lr_scheduler.get_last_lr()[0]
+                target_model.lr_scheduler.step()
+
+            accuracy = AConvNet_validation(target_model, test_dataloader)
+
+            logging.info(
+                f'Epoch: {epoch + 1:03d}/{epochs:03d} | loss={np.mean(_loss):.4f} | lr={lr} | accuracy={accuracy:.2f}'
+            )
+
+            print('Epoch: ' + str(epoch+1) + '/' + str(epochs) + ' | loss= ' + str(np.mean(_loss)) + ' | accuracy= ' + str(accuracy) + '\n')
+
+            history['loss'].append(np.mean(_loss))
+            history['accuracy'].append(accuracy)
+
+            if experiments_path:
+                target_model.save(os.path.join(model_path, f'model-{epoch + 1:03d}.pth'))
+
+        with open(os.path.join(history_path, f'history-{model_name}.json'), mode='w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=True, indent=2)
+
+    else:
+        target_model.train()
+        optimizer = torch.optim.Adam(target_model.parameters(), lr=LR_TARGET_MODEL)
+
+        for epoch in range(epochs):
+            loss_epoch = 0
+
+            for i, data in enumerate(train_dataloader, 0):
+
+                train_imgs, train_labels = data
+                train_imgs, train_labels = train_imgs.to(device), train_labels.to(device)
+
+                logits_model = target_model(train_imgs)
+                criterion = F.cross_entropy(logits_model, train_labels)
+                loss_epoch += criterion
+                
+                optimizer.zero_grad()
+                criterion.backward()
+                optimizer.step()
+
+            print('Loss in epoch {}: {}'.format(epoch, loss_epoch.item()))
+
+        # save model
+        targeted_model_file_name = './checkpoints/target/{}_bs_{}_lbound_{}.pth'.format(target, batch_size, l_inf_bound)
+        torch.save(target_model.state_dict(), targeted_model_file_name)
+        target_model.eval()
+
+        n_correct = 0
+        for i, data in enumerate(test_dataloader, 0):
+            test_img, test_label = data
+            test_img, test_label = test_img.to(device), test_label.to(device)
             
-            optimizer.zero_grad()
-            criterion.backward()
-            optimizer.step()
+            pred_lab = torch.argmax(target_model(test_img), 1)
+            n_correct += torch.sum(pred_lab == test_label,0)
 
-        print('Loss in epoch {}: {}'.format(epoch, loss_epoch.item()))
-
-    # save model
-    targeted_model_file_name = './checkpoints/target/{}_bs_{}_lbound_{}.pth'.format(target, batch_size, l_inf_bound)
-    torch.save(target_model.state_dict(), targeted_model_file_name)
-    target_model.eval()
-
-    n_correct = 0
-    for i, data in enumerate(test_dataloader, 0):
-        test_img, test_label = data
-        test_img, test_label = test_img.to(device), test_label.to(device)
-        
-        pred_lab = torch.argmax(target_model(test_img), 1)
-        n_correct += torch.sum(pred_lab == test_label,0)
-
-    print('{} test set:'.format(target))
-    print('Correctly Classified: ', n_correct.item())
-    print('Accuracy in {} test set: {}%\n'.format(target, 100 * n_correct.item()/dataset_size))
+        print('{} test set:'.format(target))
+        print('Correctly Classified: ', n_correct.item())
+        print('Accuracy in {} test set: {}%\n'.format(target, 100 * n_correct.item()/dataset_size))
 
 
 def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, batch_size, l_inf_bound, dataset_size):
@@ -301,74 +423,92 @@ def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, bat
     print('Accuracy under attacks in {} {} set: {}%\n'.format(target, mode, 100 * n_correct.item()/dataset_size))
 
 
+def run_freeze_support():
+    torch.multiprocessing.freeze_support()
+
+if __name__ == '__main__':
+
+    run_freeze_support()
+
+    print('\nLOADING CONFIGURATIONS...')
+    TARGET, LR_TARGET_MODEL, EPOCHS_TARGET_MODEL, L_INF_BOUND, EPOCHS, LR, ALPHA, BETA, GAMMA, KAPPA, C, N_STEPS_D, N_STEPS_G, IS_RELATIVISTIC = load_hyperparameters('hyperparams.json')
 
 
-print('\nLOADING CONFIGURATIONS...')
-TARGET, LR_TARGET_MODEL, EPOCHS_TARGET_MODEL, L_INF_BOUND, EPOCHS, LR, ALPHA, BETA, GAMMA, KAPPA, C, N_STEPS_D, N_STEPS_G, IS_RELATIVISTIC = load_hyperparameters('hyperparams.json')
+    print('\nCREATING NECESSARY DIRECTORIES...')
+    create_dirs()
 
 
-print('\nCREATING NECESSARY DIRECTORIES...')
-create_dirs()
+    # Define what device we are using
+    print('\nCHECKING FOR CUDA...')
+    use_cuda = True
+    print('CUDA Available: ',torch.cuda.is_available())
+    device = torch.device('cuda' if (use_cuda and torch.cuda.is_available()) else 'cpu')
+
+    print('\nPREPARING DATASETS...')
+    train_dataloader, test_dataloader, target_model, batch_size, l_inf_bound, n_labels, n_channels, test_set_size = init_params(TARGET)
+
+    if TARGET != 'HighResolution' and TARGET != 'MSTAR':
+        print('CHECKING FOR PRETRAINED TARGET MODEL...')
+        try:
+            pretrained_target = './checkpoints/target/{}_bs_{}_lbound_{}.pth'.format(TARGET, batch_size, l_inf_bound)
+            target_model.load_state_dict(torch.load(pretrained_target))
+            target_model.eval()
+        except FileNotFoundError:
+            print('\tNO PRETRAINED MODEL FOUND... TRAINING TARGET FROM SCRATCH...')
+            train_target_model(
+                                target=TARGET, 
+                                target_model=target_model, 
+                                epochs=EPOCHS_TARGET_MODEL, 
+                                train_dataloader=train_dataloader, 
+                                test_dataloader=test_dataloader, 
+                                dataset_size=test_set_size
+                            )
+    elif TARGET == 'MSTAR':
+        try:
+            pretrained_target = './AConvNet_MSTAR_experiments/model/AConvNet-SOC/model-090-best.pth'
+            target_model.load(pretrained_target)
+        except:
+            print('\tNO PRETRAINED MODEL FOUND... TRAINING TARGET FROM SCRATCH...\n')
+            train_target_model(
+                                target=TARGET, 
+                                target_model=target_model, 
+                                epochs=EPOCHS_TARGET_MODEL, 
+                                train_dataloader=train_dataloader, 
+                                test_dataloader=test_dataloader, 
+                                dataset_size=test_set_size
+                            )
+    print('TARGET LOADED!')
 
 
-# Define what device we are using
-print('\nCHECKING FOR CUDA...')
-use_cuda = True
-print('CUDA Available: ',torch.cuda.is_available())
-device = torch.device('cuda' if (use_cuda and torch.cuda.is_available()) else 'cpu')
-
-
-print('\nPREPARING DATASETS...')
-train_dataloader, test_dataloader, target_model, batch_size, l_inf_bound, n_labels, n_channels, test_set_size = init_params(TARGET)
-
-if TARGET != 'HighResolution':
-    print('CHECKING FOR PRETRAINED TARGET MODEL...')
-    try:
-        pretrained_target = './checkpoints/target/{}_bs_{}_lbound_{}.pth'.format(TARGET, batch_size, l_inf_bound)
-        target_model.load_state_dict(torch.load(pretrained_target))
-        target_model.eval()
-    except FileNotFoundError:
-        print('\tNO PRETRAINED MODEL FOUND... TRAINING TARGET FROM SCRATCH...')
-        train_target_model(
+    # train AdvGAN
+    print('\nTRAINING ADVGAN...')
+    advGAN = AdvGAN_Attack(
+                            device, 
+                            target_model, 
+                            n_labels, 
+                            n_channels, 
                             target=TARGET, 
-                            target_model=target_model, 
-                            epochs=EPOCHS_TARGET_MODEL, 
-                            train_dataloader=train_dataloader, 
-                            test_dataloader=test_dataloader, 
-                            dataset_size=test_set_size
+                            lr=LR, 
+                            l_inf_bound=l_inf_bound, 
+                            alpha=ALPHA, 
+                            beta=BETA, 
+                            gamma=GAMMA, 
+                            kappa=KAPPA, 
+                            c=C, 
+                            n_steps_D=N_STEPS_D, 
+                            n_steps_G=N_STEPS_G, 
+                            is_relativistic=IS_RELATIVISTIC
                         )
-print('TARGET LOADED!')
+    advGAN.train(train_dataloader, EPOCHS)
 
 
-# train AdvGAN
-print('\nTRAINING ADVGAN...')
-advGAN = AdvGAN_Attack(
-                        device, 
-                        target_model, 
-                        n_labels, 
-                        n_channels, 
-                        target=TARGET, 
-                        lr=LR, 
-                        l_inf_bound=l_inf_bound, 
-                        alpha=ALPHA, 
-                        beta=BETA, 
-                        gamma=GAMMA, 
-                        kappa=KAPPA, 
-                        c=C, 
-                        n_steps_D=N_STEPS_D, 
-                        n_steps_G=N_STEPS_G, 
-                        is_relativistic=IS_RELATIVISTIC
-                    )
-advGAN.train(train_dataloader, EPOCHS)
+    # load the trained AdvGAN
+    print('\nLOADING TRAINED ADVGAN!')
+    adv_GAN_path = './checkpoints/AdvGAN/G_epoch_{}.pth'.format(EPOCHS)
+    adv_GAN = models.Generator(n_channels, n_channels, TARGET).to(device)
+    adv_GAN.load_state_dict(torch.load(adv_GAN_path))
+    adv_GAN.eval()
 
 
-# load the trained AdvGAN
-print('\nLOADING TRAINED ADVGAN!')
-adv_GAN_path = './checkpoints/AdvGAN/G_epoch_{}.pth'.format(EPOCHS)
-adv_GAN = models.Generator(n_channels, n_channels, TARGET).to(device)
-adv_GAN.load_state_dict(torch.load(adv_GAN_path))
-adv_GAN.eval()
-
-
-print('\nTESTING PERFORMANCE OF ADVGAN...')
-test_attack_performance(target=TARGET, dataloader=test_dataloader, mode='test', adv_GAN=adv_GAN, target_model=target_model, batch_size=batch_size, l_inf_bound=l_inf_bound, dataset_size=test_set_size)
+    print('\nTESTING PERFORMANCE OF ADVGAN...')
+    test_attack_performance(target=TARGET, dataloader=test_dataloader, mode='test', adv_GAN=adv_GAN, target_model=target_model, batch_size=batch_size, l_inf_bound=l_inf_bound, dataset_size=test_set_size)

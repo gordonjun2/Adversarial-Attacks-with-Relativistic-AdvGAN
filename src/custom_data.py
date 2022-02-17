@@ -51,7 +51,6 @@ class HighResolutionDataset(Dataset):
 
         return tensor_image, true_label
 
-
 def split_dataset(dataset, test_size=.1, shuffle=True):
     random_seed = 42
     dataset_size = len(dataset)
