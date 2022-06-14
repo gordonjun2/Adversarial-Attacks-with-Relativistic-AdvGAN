@@ -176,6 +176,7 @@ def init_params(target):
         train_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
         test_dataloader = DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
     elif target == 'MSTAR':
+        #l_inf_bound = 8/255 if L_INF_BOUND == 'Auto' else L_INF_BOUND/255
         l_inf_bound = .01 if L_INF_BOUND == 'Auto' else L_INF_BOUND
 
         # copy AConvNet-pytorch (https://github.com/jangsoopark/AConvNet-pytorch/blob/main/experiments/config/AConvNet-SOC.json)
@@ -216,7 +217,7 @@ def init_params(target):
 
         # # for parameter in model.parameters():
         # #     parameter.requires_grad = False
-
+  
         # # model.fc = nn.Sequential(
         # #     nn.Linear(model.fc.in_features, 10),
         # #     nn.Linear(10, 2)
@@ -368,7 +369,7 @@ def train_target_model(target, target_model, epochs, train_dataloader, test_data
             n_correct += torch.sum(pred_lab == test_label,0)
 
         print('{} test set:'.format(target))
-        print('Correctly Classified: ', n_correct.item())
+        print('Correctly Classified: ' + str(n_correct.item()) + '/' + str(dataset_size))
         print('Accuracy in {} test set: {}%\n'.format(target, 100 * n_correct.item()/dataset_size))
 
 
@@ -378,7 +379,10 @@ def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, bat
     true_labels, pred_labels = [], []
     img_np, adv_img_np = [], []
     for i, data in enumerate(dataloader, 0):
-        img, true_label = data
+        if target == 'MSTAR':
+            img, true_label, _ = data
+        else:
+            img, true_label = data
         img, true_label = img.to(device), true_label.to(device)
         
         perturbation = adv_GAN(img)
@@ -386,7 +390,10 @@ def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, bat
         adv_img = torch.clamp(perturbation, -l_inf_bound, l_inf_bound) + img
         adv_img = torch.clamp(adv_img, 0, 1)
         
-        pred_label = torch.argmax(target_model(adv_img), 1)
+        if target == 'MSTAR':
+            pred_label = torch.argmax(target_model.advGAN_logits(adv_img), 1)
+        else:
+            pred_label = torch.argmax(target_model(adv_img), 1)
         n_correct += torch.sum(pred_label == true_label, 0)
 
         true_labels.append(true_label.cpu().numpy())
@@ -398,6 +405,7 @@ def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, bat
         print('Saving images for batch {} out of {}'.format(i+1, len(dataloader)))
         for j in range(adv_img.shape[0]):
             cur_img = adv_img[j].detach()
+            true_cur_img = img[j].detach()
             
             if target == 'HighResolution':
                 inv_norm = cd.NormalizeInverse(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -405,7 +413,8 @@ def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, bat
 
                 save_image(cur_img + perturbation[j], './results/examples/{}/{}/example_{}_{}.png'.format(target, mode, i, j))
             else:
-                save_image(cur_img, './results/examples/{}/{}/example_{}_{}.png'.format(target, mode, i, j))
+                save_image(cur_img, './results/examples/{}/{}/adv_example_{}_{}.png'.format(target, mode, i, j))
+                save_image(true_cur_img, './results/examples/{}/{}/true_example_{}_{}.png'.format(target, mode, i, j))
 
 
     true_labels = np.concatenate(true_labels, axis=0)
@@ -419,7 +428,7 @@ def test_attack_performance(target, dataloader, mode, adv_GAN, target_model, bat
     np.save('./npy/{}/adv_img_np'.format(target), adv_img_np)
 
     print(target)
-    print('Correctly Classified: ', n_correct.item())
+    print('Correctly Classified: ' + str(n_correct.item()) + '/' + str(dataset_size))
     print('Accuracy under attacks in {} {} set: {}%\n'.format(target, mode, 100 * n_correct.item()/dataset_size))
 
 
@@ -430,13 +439,14 @@ if __name__ == '__main__':
 
     run_freeze_support()
 
+    test_advGAN_only = True
+
     print('\nLOADING CONFIGURATIONS...')
     TARGET, LR_TARGET_MODEL, EPOCHS_TARGET_MODEL, L_INF_BOUND, EPOCHS, LR, ALPHA, BETA, GAMMA, KAPPA, C, N_STEPS_D, N_STEPS_G, IS_RELATIVISTIC = load_hyperparameters('hyperparams.json')
 
 
     print('\nCREATING NECESSARY DIRECTORIES...')
     create_dirs()
-
 
     # Define what device we are using
     print('\nCHECKING FOR CUDA...')
@@ -465,9 +475,10 @@ if __name__ == '__main__':
                             )
     elif TARGET == 'MSTAR':
         try:
-            pretrained_target = './AConvNet_MSTAR_experiments/model/AConvNet-SOC/model-090-best.pth'
+            pretrained_target = './AConvNet_MSTAR_experiments/model/AConvNet-SOC/model-038-best.pth'
             target_model.load(pretrained_target)
-        except:
+
+        except FileNotFoundError:
             print('\tNO PRETRAINED MODEL FOUND... TRAINING TARGET FROM SCRATCH...\n')
             train_target_model(
                                 target=TARGET, 
@@ -480,35 +491,37 @@ if __name__ == '__main__':
     print('TARGET LOADED!')
 
 
-    # train AdvGAN
-    print('\nTRAINING ADVGAN...')
-    advGAN = AdvGAN_Attack(
-                            device, 
-                            target_model, 
-                            n_labels, 
-                            n_channels, 
-                            target=TARGET, 
-                            lr=LR, 
-                            l_inf_bound=l_inf_bound, 
-                            alpha=ALPHA, 
-                            beta=BETA, 
-                            gamma=GAMMA, 
-                            kappa=KAPPA, 
-                            c=C, 
-                            n_steps_D=N_STEPS_D, 
-                            n_steps_G=N_STEPS_G, 
-                            is_relativistic=IS_RELATIVISTIC
-                        )
-    advGAN.train(train_dataloader, EPOCHS)
-
+    if not test_advGAN_only:
+        # train AdvGAN
+        print('\nTRAINING ADVGAN...')
+        advGAN = AdvGAN_Attack(
+                                device, 
+                                target_model, 
+                                n_labels, 
+                                n_channels, 
+                                target=TARGET, 
+                                lr=LR, 
+                                l_inf_bound=l_inf_bound, 
+                                alpha=ALPHA, 
+                                beta=BETA, 
+                                gamma=GAMMA, 
+                                kappa=KAPPA, 
+                                c=C, 
+                                n_steps_D=N_STEPS_D, 
+                                n_steps_G=N_STEPS_G, 
+                                is_relativistic=IS_RELATIVISTIC
+                            )
+        advGAN.train(TARGET, train_dataloader, EPOCHS)
 
     # load the trained AdvGAN
     print('\nLOADING TRAINED ADVGAN!')
     adv_GAN_path = './checkpoints/AdvGAN/G_epoch_{}.pth'.format(EPOCHS)
     adv_GAN = models.Generator(n_channels, n_channels, TARGET).to(device)
-    adv_GAN.load_state_dict(torch.load(adv_GAN_path))
+    if torch.cuda.is_available() == True:
+        adv_GAN.load_state_dict(torch.load(adv_GAN_path))
+    else:
+        adv_GAN.load_state_dict(torch.load(adv_GAN_path, map_location=torch.device('cpu')))
     adv_GAN.eval()
-
 
     print('\nTESTING PERFORMANCE OF ADVGAN...')
     test_attack_performance(target=TARGET, dataloader=test_dataloader, mode='test', adv_GAN=adv_GAN, target_model=target_model, batch_size=batch_size, l_inf_bound=l_inf_bound, dataset_size=test_set_size)

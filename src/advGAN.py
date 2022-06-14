@@ -107,7 +107,7 @@ class AdvGAN_Attack:
             os.makedirs('{}{}/'.format(losses_path, target))
 
 
-    def train_batch(self, x, labels):
+    def train_batch(self, TARGET, x, labels):
         # optimize D
         for i in range(self.n_steps_D):
             perturbation = self.G(x)
@@ -148,10 +148,13 @@ class AdvGAN_Attack:
             loss_hinge = torch.max(torch.zeros(1, device=self.device), perturbation_norm - self.c)
 
             # the Adv Loss part of L
-            logits_model = self.model(adv_images)
+            if TARGET == 'MSTAR':
+                logits_model = self.model.advGAN_logits(adv_images)
+            else:
+                logits_model = self.model(adv_images)
+
             probs_model = F.softmax(logits_model, dim=1)
             onehot_labels = torch.eye(self.n_labels, device=self.device)[labels]
-
             # C&W loss
             real_class_prob = torch.sum(onehot_labels * probs_model, dim=1)
             target_class_prob, _ = torch.max((1 - onehot_labels) * probs_model - onehot_labels * 10000, dim=1)
@@ -179,16 +182,19 @@ class AdvGAN_Attack:
         return loss_D.item(), loss_G.item(), loss_G_gan.item(), loss_hinge.item(), loss_adv.item()
 
 
-    def train(self, train_dataloader, epochs):
+    def train(self, TARGET, train_dataloader, epochs):
         loss_D, loss_G, loss_G_gan, loss_hinge, loss_adv = [], [], [], [], []
         
         for epoch in range(1, epochs+1):
             loss_D_sum, loss_G_sum, loss_G_gan_sum, loss_hinge_sum, loss_adv_sum = 0, 0, 0, 0, 0
             for i, data in enumerate(train_dataloader, start=0):
-                images, labels = data
+                if TARGET == 'MSTAR':
+                    images, labels, _ = data
+                else:
+                    images, labels = data
                 images, labels = images.to(self.device), labels.to(self.device)
 
-                loss_D_batch, loss_G_batch, loss_G_fake_batch, loss_hinge_batch, loss_adv_batch = self.train_batch(images, labels)
+                loss_D_batch, loss_G_batch, loss_G_fake_batch, loss_hinge_batch, loss_adv_batch = self.train_batch(TARGET, images, labels)
 
                 loss_D_sum += loss_D_batch
                 loss_G_sum += loss_G_batch

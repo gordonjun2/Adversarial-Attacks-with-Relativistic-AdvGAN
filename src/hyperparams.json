@@ -7,9 +7,9 @@
 
 
 
-	"comment" : "Settings for AdvGAN", 
+	"comment" : "Settings for AdvGAN, initial epoch is 60 and initial alpha is 5", 
 
-	"AdvGAN_epochs" : 60, 
+	"AdvGAN_epochs" : 100, 
 	"AdvGAN_learning_rate" : 0.001, 
 	"maximum_perturbation_allowed" : "Auto", 
 	"alpha" : 5, 
