@@ -1,3 +1,13 @@
+## NOTE by Gordon
+
+For MSTAR dataset training, the dataset can be downloaded [here](https://drive.google.com/file/d/1fzIQenVRSaMpcNRXtwp8xdd0aiCzhiEr/view?usp=sharing).
+
+Place the *MSTAR_AConvNet_PyTorch* folder into
+```./Adversarial-Attacks-with-Relativistic-AdvGAN/src/datasets/```.
+
+To start the training / testing, run
+```python main.py```.
+
 # Adversarial Attacks with AdvGAN and AdvRaLSGAN
 
 
